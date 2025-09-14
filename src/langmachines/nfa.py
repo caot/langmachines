@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, Set, Tuple
+from typing import Dict, Set, Tuple, Hashable, FrozenSet, AbstractSet
 
 from .dfa import DFA, State, Symbol
 
@@ -16,12 +16,12 @@ class NFA:
     delta: Dict[Tuple[State, Symbol], Set[State]]
 
 
-def epsilon_closure(nfa: NFA, states: Set[State]) -> Set[State]:
+def epsilon_closure(nfa: NFA, states: AbstractSet[State]) -> Set[State]:
     """
     Compute the ε-closure of a set of states in the NFA.
-    That is, all states reachable by following ε-transitions (including the input states).
+    Accepts any set-like (set/frozenset).
     """
-    closure = set(states)
+    closure: Set[State] = set(states)
     stack = list(states)
     while stack:
         s = stack.pop()
@@ -32,11 +32,12 @@ def epsilon_closure(nfa: NFA, states: Set[State]) -> Set[State]:
     return closure
 
 
-def move(nfa: NFA, states: Set[State], symbol: Symbol) -> Set[State]:
+def move(nfa: NFA, states: AbstractSet[State], symbol: Symbol) -> Set[State]:
     """
     From a set of states, follow `symbol` transitions (excluding ε).
+    Accepts any set-like (set/frozenset).
     """
-    nxt = set()
+    nxt: Set[State] = set()
     for s in states:
         nxt |= nfa.delta.get((s, symbol), set())
     return nxt
@@ -44,17 +45,16 @@ def move(nfa: NFA, states: Set[State], symbol: Symbol) -> Set[State]:
 
 def to_dfa(nfa: NFA) -> DFA:
     """
-    Subset construction (a.k.a. powerset construction).
-    Converts an NFA (with ε-transitions) into an equivalent DFA.
+    Subset (powerset) construction from NFA (with ε) to equivalent DFA.
+    Internally represents DFA states as FrozenSet[State].
     """
+    # Start is ε-closure of NFA start
+    start_closure: FrozenSet[State] = frozenset(epsilon_closure(nfa, {nfa.start}))
 
-    # Start state is ε-closure of NFA start
-    start_closure = frozenset(epsilon_closure(nfa, {nfa.start}))
-
-    unmarked: list[frozenset[State]] = [start_closure]
-    dfa_states: Set[frozenset[State]] = {start_closure}
-    dfa_delta: Dict[Tuple[frozenset[State], Symbol], frozenset[State]] = {}
-    dfa_accept: Set[frozenset[State]] = set()
+    unmarked: list[FrozenSet[State]] = [start_closure]
+    dfa_states: Set[FrozenSet[State]] = {start_closure}
+    dfa_delta: Dict[Tuple[FrozenSet[State], Symbol], FrozenSet[State]] = {}
+    dfa_accept: Set[FrozenSet[State]] = set()
 
     while unmarked:
         S = unmarked.pop()
@@ -62,28 +62,28 @@ def to_dfa(nfa: NFA) -> DFA:
             dfa_accept.add(S)
 
         for a in nfa.alphabet:
-            # ignore ε in DFA alphabet
             if a == EPSILON:
                 continue
-            # compute move + ε-closure
-            T = epsilon_closure(nfa, move(nfa, S, a))
-            if not T:
+            # compute move + ε-closure; freeze to be a valid DFA state key
+            T_set = epsilon_closure(nfa, move(nfa, S, a))
+            if not T_set:
                 continue
-            T_frozen = frozenset(T)
-            dfa_delta[(S, a)] = T_frozen
-            if T_frozen not in dfa_states:
-                dfa_states.add(T_frozen)
-                unmarked.append(T_frozen)
+            T: FrozenSet[State] = frozenset(T_set)
+            dfa_delta[(S, a)] = T
+            if T not in dfa_states:
+                dfa_states.add(T)
+                unmarked.append(T)
 
-    # Convert frozensets to string names (stable identifiers)
-    state_names: Dict[frozenset[State], str] = {}
-    for i, S in enumerate(sorted(dfa_states, key=lambda s: sorted(map(str, s)))):
+    # Give stable string names to each DFA state
+    state_names: Dict[FrozenSet[State], str] = {}
+    for i, S in enumerate(sorted(dfa_states, key=lambda ss: tuple(sorted(map(str, ss))))):
         state_names[S] = f"Q{i}"
 
-    new_states = set(state_names.values())
-    new_start = state_names[start_closure]
-    new_accept = {state_names[S] for S in dfa_accept}
-    new_delta = {}
+    # Assemble DFA with Hashable-typed containers to satisfy DFA signature
+    new_states: Set[Hashable] = set(state_names.values())
+    new_start: Hashable = state_names[start_closure]
+    new_accept: Set[Hashable] = {state_names[S] for S in dfa_accept}
+    new_delta: Dict[Tuple[Hashable, Hashable], Hashable] = {}
     for (S, a), T in dfa_delta.items():
         new_delta[(state_names[S], a)] = state_names[T]
 
